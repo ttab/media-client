@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 
+	"github.com/jellydator/ttlcache/v3"
 	jsoniter "github.com/json-iterator/go"
 	"github.com/ttab/elephantine"
 	"github.com/ttab/ttninjs"
@@ -31,26 +32,66 @@ func (err TTNINJSPermanentError) Error() string {
 	return "permanent error: " + string(err.Cause)
 }
 
+// MediaOptions configures the Media client.
+type MediaOptions struct {
+	Logger *slog.Logger
+	Client *http.Client
+	Host   string
+	// Cache enables TTNINJS document caching. If nil, no caching is performed.
+	Cache *CacheOptions
+}
+
 type Media struct {
 	logger *slog.Logger
 	client *http.Client
 	host   string
+	cache  *mediaCache
 }
 
-func NewMedia(
-	logger *slog.Logger,
-	client *http.Client,
-	host string,
-) *Media {
-	return &Media{
-		logger: logger,
-		client: client,
-		host:   host,
+func NewMedia(opts MediaOptions) *Media {
+	m := &Media{
+		logger: opts.Logger,
+		client: opts.Client,
+		host:   opts.Host,
 	}
+
+	if opts.Cache != nil {
+		m.cache = newCache(*opts.Cache)
+	}
+
+	return m
 }
 
 func (m *Media) GetRenderedTTNINJS(
 	ctx context.Context, docURI string, _ []byte,
+) (ttninjs.Document, error) {
+	if m.cache == nil {
+		return m.fetch(ctx, docURI)
+	}
+
+	if item := m.cache.store.Get(docURI); item != nil {
+		return item.Value(), nil
+	}
+
+	result, err, _ := m.cache.group.Do(docURI, func() (any, error) {
+		doc, err := m.fetch(context.Background(), docURI)
+		if err != nil {
+			return nil, err
+		}
+
+		m.cache.store.Set(docURI, doc, ttlcache.DefaultTTL)
+
+		return doc, nil
+	})
+	if err != nil {
+		return ttninjs.Document{}, err //nolint:wrapcheck
+	}
+
+	return result.(ttninjs.Document), nil //nolint:forcetypeassert
+}
+
+func (m *Media) fetch(
+	ctx context.Context, docURI string,
 ) (_ ttninjs.Document, outError error) {
 	parsedURI, err := url.Parse(docURI)
 	if err != nil {

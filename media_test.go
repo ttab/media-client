@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"sync/atomic"
 	"testing"
 
 	mc "github.com/ttab/media-client"
@@ -23,7 +24,11 @@ func TestMedia(t *testing.T) {
 		"/media/text/231107-oktobervader-1d76cbf0.json",
 		"./testdata/ttninjs.weather.rendered.json")
 
-	media := mc.NewMedia(logger, server.Client(), server.Host())
+	media := mc.NewMedia(mc.MediaOptions{
+		Logger: logger,
+		Client: server.Client(),
+		Host:   server.Host(),
+	})
 
 	doc, err := media.GetRenderedTTNINJS(
 		ctx, "http://tt.se/media/text/231107-oktobervader-1d76cbf0", nil)
@@ -42,10 +47,57 @@ func TestMedia(t *testing.T) {
 	}
 }
 
+func TestMediaCache(t *testing.T) {
+	ctx := t.Context()
+	logger := slog.New(test.NewLogHandler(t, slog.LevelWarn))
+
+	const path = "/media/text/231107-oktobervader-1d76cbf0.json"
+	const uri = "http://tt.se/media/text/231107-oktobervader-1d76cbf0"
+
+	server := NewMediaMockServer(t)
+
+	server.AddDocument(t, path, "./testdata/ttninjs.weather.rendered.json")
+
+	media := mc.NewMedia(mc.MediaOptions{
+		Logger: logger,
+		Client: server.Client(),
+		Host:   server.Host(),
+		Cache:  &mc.CacheOptions{},
+	})
+
+	// First request hits the server.
+	doc, err := media.GetRenderedTTNINJS(ctx, uri, nil)
+	test.Must(t, err, "first fetch")
+	test.Equal(t, int64(1), server.RequestCount(), "first fetch should hit server")
+
+	// Second request is served from cache even after the document is removed.
+	server.RemoveDocument(path)
+
+	doc2, err := media.GetRenderedTTNINJS(ctx, uri, nil)
+	test.Must(t, err, "second fetch")
+	test.Equal(t, int64(1), server.RequestCount(), "second fetch should be served from cache")
+	test.Equal(t, doc.Headline, doc2.Headline, "cached document should match original")
+
+	// Errors are not cached: a failed lookup is retried on the next request.
+	const missingURI = "http://tt.se/media/image/missing"
+	const missingPath = "/media/image/missing.json"
+
+	_, err = media.GetRenderedTTNINJS(ctx, missingURI, nil)
+	test.MustNot(t, err, "fetch missing document should fail")
+	test.Equal(t, int64(2), server.RequestCount(), "missing fetch should hit server")
+
+	server.AddDocument(t, missingPath, "./testdata/ttninjs.weather.rendered.json")
+
+	_, err = media.GetRenderedTTNINJS(ctx, missingURI, nil)
+	test.Must(t, err, "fetch after document added")
+	test.Equal(t, int64(3), server.RequestCount(), "retry after error should hit server")
+}
+
 type MediaMockServer struct {
-	server    *httptest.Server
-	host      string
-	documents map[string][]byte
+	server       *httptest.Server
+	host         string
+	documents    map[string][]byte
+	requestCount atomic.Int64
 }
 
 func NewMediaMockServer(t *testing.T) *MediaMockServer {
@@ -88,7 +140,17 @@ func (ms *MediaMockServer) AddDocument(
 	ms.documents[path] = data
 }
 
+func (ms *MediaMockServer) RequestCount() int64 {
+	return ms.requestCount.Load()
+}
+
+func (ms *MediaMockServer) RemoveDocument(path string) {
+	delete(ms.documents, path)
+}
+
 func (ms *MediaMockServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	ms.requestCount.Add(1)
+
 	data, ok := ms.documents[r.URL.Path]
 	if !ok {
 		w.WriteHeader(http.StatusNotFound)
