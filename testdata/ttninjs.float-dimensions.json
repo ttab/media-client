@@ -1,0 +1,12 @@
+{
+  "uri": "http://tt.se/media/image/float-dimensions",
+  "type": "picture",
+  "renditions": {
+    "r01": {
+      "href": "https://tt.se/bild/float-dimensions.jpg",
+      "mimetype": "image/jpeg",
+      "height": 278.0000000000028,
+      "width": 416.99999999999994
+    }
+  }
+}

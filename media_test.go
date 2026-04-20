@@ -47,6 +47,35 @@ func TestMedia(t *testing.T) {
 	}
 }
 
+func TestMediaFloatDimensions(t *testing.T) {
+	ctx := t.Context()
+	logger := slog.New(test.NewLogHandler(t, slog.LevelWarn))
+
+	server := NewMediaMockServer(t)
+
+	server.AddDocument(t,
+		"/media/image/float-dimensions.json",
+		"./testdata/ttninjs.float-dimensions.json")
+
+	media := mc.NewMedia(mc.MediaOptions{
+		Logger: logger,
+		Client: server.Client(),
+		Host:   server.Host(),
+	})
+
+	doc, err := media.GetRenderedTTNINJS(
+		ctx, "http://tt.se/media/image/float-dimensions", nil)
+	test.Must(t, err, "fetch document with float dimensions")
+
+	r01, ok := doc.Renditions["r01"]
+	if !ok {
+		t.Fatal("expected rendition r01")
+	}
+
+	test.Equal(t, 278, r01.Height, "float height should be truncated to int")
+	test.Equal(t, 416, r01.Width, "float width should be truncated to int")
+}
+
 func TestMediaCache(t *testing.T) {
 	ctx := t.Context()
 	logger := slog.New(test.NewLogHandler(t, slog.LevelWarn))

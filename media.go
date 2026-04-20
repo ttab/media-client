@@ -11,9 +11,16 @@ import (
 
 	"github.com/jellydator/ttlcache/v3"
 	jsoniter "github.com/json-iterator/go"
+	"github.com/json-iterator/go/extra"
 	"github.com/ttab/elephantine"
 	"github.com/ttab/ttninjs"
 )
+
+func init() {
+	// Allow float values in JSON fields declared as int (e.g. height/width
+	// rendition fields that some sources emit as 278.000000).
+	extra.RegisterFuzzyDecoders()
+}
 
 type TTNINJSErrorCause string
 
